@@ -129,7 +129,7 @@ AI-Document-Summarizer/
 
 # 🚀 Getting Started
 
-## 🔧 Backend Setup
+##backend setup
 ```bash
 cd backend
 python -m venv venv
@@ -137,19 +137,16 @@ venv\Scripts\activate
 pip install -r requirements.txt
 
 
-
-
-
 Add your GROQ key to .env:
 GROQ_API_KEY=your_key_here
 
 
-
 Run backend:
 python app.py
+---
 
+##Frontend Setup
 
-Frontend Setup
 cd frontend
 npm install
 npm run dev
@@ -167,11 +164,13 @@ npm run dev
 6.Each chunk summarized using GROQ
 7.Final combined summary returned
 8.UI displays summary in ChatGPT-style bubbles
+---
+
+<img width="1918" height="959" alt="image" src="https://github.com/user-attachments/assets/a74fff3f-737b-4e75-a0c8-855d05c9a109" />
 
 
-<img width="1918" height="959" alt="image" src="https://github.com/user-attachments/assets/40ff97ae-c054-4660-9903-940b49cfc898" />
 
-
+---
 🧪 Example Input vs Output
 
 Input:
