@@ -7,11 +7,8 @@ from ocr_utils import extract_text_from_image
 import os
 
 app = Flask(__name__)
-CORS(
-    app,
-    resources={r"/*": {"origins": "*"}},
-    supports_credentials=True
-)
+CORS(app, resources={r"/*": {"origins": "https://ai-document-summarizer-khaki.vercel.app/"}})
+
 
 
 @app.route("/summarize", methods=["POST"])
