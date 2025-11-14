@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: document-summarizer-backend
+    env: python
+    buildCommand: ""
+    startCommand: gunicorn app:app
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FLASK_SECRET
+        sync: false
