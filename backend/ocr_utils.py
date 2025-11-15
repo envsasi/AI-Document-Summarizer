@@ -1,8 +1,10 @@
 # backend/ocr_utils.py
-import requests
 import io
 
-OCR_API_KEY = None  # Loaded later from environment in app.py
+import requests
+import os
+
+OCR_API_KEY = os.getenv("OCR_API_KEY")
 
 
 def extract_text_from_image(file_stream):
