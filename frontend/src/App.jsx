@@ -31,7 +31,7 @@ export default function App() {
     fd.append("length", length);
 
     try {
-    const res = await fetch("https://ai-document-summarizer-bakw.onrender.com/summarize", {
+    const res = await fetch("https://ai-document-summarizer-bakw.onrender.com/", {
         method: "POST",
         body: fd,
       });
