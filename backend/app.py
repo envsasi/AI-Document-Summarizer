@@ -8,8 +8,11 @@ from flask_cors import CORS
 
 # your helper modules (unchanged)
 from pdf_utils import extract_text_from_pdf
-from ocr_utils import extract_text_from_image
 from summarizer import generate_summary
+from ocr_utils import extract_text_from_image, OCR_API_KEY
+
+# load OCR API key from environment
+OCR_API_KEY = os.getenv("OCR_API_KEY", None)
 
 # Setup logging so Render shows traces
 logging.basicConfig(level=logging.INFO)
