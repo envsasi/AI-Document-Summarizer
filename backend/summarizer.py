@@ -1,101 +1,135 @@
-from groq import Groq
-from dotenv import load_dotenv
+# backend/summarizer.py
 import os
+import math
+import time
+import logging
+from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger("doc_summarizer")
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+# Optional: import Groq SDK; ensure it's in requirements.txt
+try:
+    from groq import Groq
+except Exception:
+    Groq = None
 
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", None)
+if Groq and GROQ_API_KEY:
+    client = Groq(api_key=GROQ_API_KEY)
+else:
+    client = None
 
-# -------------------------------
-# Split PDF text safely into chunks
-# -------------------------------
-def split_into_chunks(text, max_chars=3500):
-    chunks = []
-    while len(text) > max_chars:
-        part = text[:max_chars]
+# Tunable limits (chars approximate — tokens vs chars varies by language/model)
+CHUNK_MAX_CHARS = 9000   # each chunk will be roughly up to this many characters
+COMBINE_SUMMARIES_THRESHOLD = 16000  # if combined summaries still long, we re-summarize
 
-        # Try to end at a sentence boundary
-        boundary = part.rfind(". ")
-        if boundary == -1:
-            boundary = max_chars
+def _call_groq(prompt, model="llama-3.1-8b-instant", timeout=60):
+    """
+    Call Groq chat completions safely and return text.
+    This function handles either dict-style or object-style responses.
+    """
+    if client is None:
+        raise RuntimeError("Groq client not configured. Set GROQ_API_KEY in env.")
 
-        chunks.append(text[:boundary + 1])
-        text = text[boundary + 1:]
+    # Build messages payload
+    messages = [{"role": "user", "content": prompt}]
+    # attempt the call with error handling
+    try:
+        response = client.chat.completions.create(model=model, messages=messages, timeout=timeout)
+        # response.choices[0].message might be an object or dict
+        choice = getattr(response, "choices", None)
+        if not choice:
+            # try as dict
+            if isinstance(response, dict) and "choices" in response:
+                choice0 = response["choices"][0]
+                msg = choice0.get("message") or choice0.get("text") or choice0
+                if isinstance(msg, dict):
+                    return msg.get("content") or msg.get("text") or str(msg)
+                else:
+                    return getattr(msg, "content", None) or getattr(msg, "text", None) or str(msg)
+            raise RuntimeError("Unexpected Groq response shape")
+        # choice may be a list-like
+        c0 = response.choices[0]
+        # message might be attribute or dict
+        msg = getattr(c0, "message", None) or (c0.get("message") if isinstance(c0, dict) else None)
+        if isinstance(msg, dict):
+            return msg.get("content") or msg.get("text") or ""
+        else:
+            # object style
+            return getattr(msg, "content", None) or getattr(msg, "text", None) or str(msg)
+    except Exception as e:
+        logger.exception("Groq API error")
+        raise
 
-    if text.strip():
-        chunks.append(text)
-
-    return chunks
-
-
-# -------------------------------
-# Summarize a single chunk
-# -------------------------------
-def summarize_chunk(chunk, instruction):
-    prompt = f"""
-You are an expert summarizer.
-
-Follow these formatting rules VERY STRICTLY:
-
-1. The summary must be written as clean, continuous text.
-2. Do NOT use any bullet points.
-3. Do NOT use *, -, +, •, or any list symbols.
-4. Do NOT format lists or headings.
-5. Do NOT preserve any formatting from the original text.
-   - If the original document contains **bold**, remove it.
-   - If the original document contains lists, remove them.
-6. Only bold words or phrases that are TRULY important.
-   - Maximum 3 to 7 bold highlights per summary.
-7. The summary should look natural, smooth, and professional.
-8. Write in one paragraph or two paragraphs (no more).
-
-Now provide a clean, well-structured summary based on the following document. Follow the above rules exactly.
-
-
-Task: {instruction}
-
-Document chunk to summarize:
-{chunk}
-"""
-
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": "You produce clear, structured, highlighted summaries."},
-            {"role": "user", "content": prompt}
-        ]
-    )
-
-    return response.choices[0].message.content.strip()
-
-
-
-# -------------------------------
-# Main summarizer (CHUNKED)
-# -------------------------------
-def generate_summary(text, length="medium"):
+def _summarize_single_chunk(chunk_text, length):
+    """
+    Single-call summarization prompt for a chunk.
+    length: 'short'|'medium'|'long'
+    """
     length_map = {
-        "short": "Summarize clearly in 3–4 sentences.",
-        "medium": "Summarize the content in a detailed paragraph.",
-        "long": "Summarize thoroughly, capturing all important ideas.",
+        "short": "Summarize concisely in 3–4 sentences, focusing on the most important points.",
+        "medium": "Summarize in a medium-length paragraph (6–10 sentences), covering key points.",
+        "long": "Summarize in detail, covering all major points clearly and thoroughly."
     }
-
     instruction = length_map.get(length, length_map["medium"])
+    prompt = f"You are an expert document summarizer.\n{instruction}\n\nDocument:\n{chunk_text}\n\nProvide the summary, keep it in plain text (no Markdown or extra symbols)."
+    return _call_groq(prompt)
 
-    # Step 1: split into chunks
-    chunks = split_into_chunks(text, max_chars=3500)
+def generate_summary(full_text, length="medium"):
+    """
+    High-level function used by backend. It will:
+     - If text is small: call model once
+     - If large: split into chunks, summarize each, then combine & final-summarize
+    """
+    if not full_text or not full_text.strip():
+        return ""
 
-    # Step 2: summarize each chunk
-    partial_summaries = []
-    for i, chunk in enumerate(chunks):
-        part_summary = summarize_chunk(chunk, instruction)
-        partial_summaries.append(part_summary)
+    # If small, call directly
+    if len(full_text) <= CHUNK_MAX_CHARS:
+        return _summarize_single_chunk(full_text, length).strip()
 
-    # Step 3: combine partial summaries
-    combined_text = "\n\n".join(partial_summaries)
+    # Otherwise, chunk
+    chunks = []
+    text = full_text.strip()
+    start = 0
+    L = len(text)
+    while start < L:
+        end = min(start + CHUNK_MAX_CHARS, L)
+        # try to cut on newline/space for nicer splits
+        if end < L:
+            # look back for newline or space
+            cut = text.rfind("\n", start, end)
+            if cut <= start:
+                cut = text.rfind(" ", start, end)
+            if cut > start:
+                end = cut
+        chunks.append(text[start:end].strip())
+        start = end
 
-    # Step 4: final summary
-    final_summary = summarize_chunk(combined_text, "Provide a combined overall summary.")
+    # Summarize each chunk
+    chunk_summaries = []
+    for idx, c in enumerate(chunks):
+        try:
+            s = _summarize_single_chunk(c, length)
+            chunk_summaries.append(s.strip())
+            # small sleep to avoid bursting rate limits (optional)
+            time.sleep(0.2)
+        except Exception as e:
+            logger.exception("Error summarizing chunk %d", idx)
+            raise RuntimeError(f"Error summarizing chunk {idx}: {e}")
 
-    return final_summary
+    # Combine summaries
+    combined = "\n\n".join(chunk_summaries)
+    # If combined is still big, shorten it first
+    if len(combined) > COMBINE_SUMMARIES_THRESHOLD:
+        # ask model to compress combined summaries into a coherent summary
+        try:
+            combined = _summarize_single_chunk(combined, "long")
+        except Exception as e:
+            logger.exception("Error compressing combined summaries")
+            raise
+
+    # Final polish/lengthing step: respect requested length
+    final_summary = _summarize_single_chunk(combined, length)
+    return final_summary.strip()
