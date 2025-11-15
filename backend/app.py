@@ -1,46 +1,44 @@
-# backend/app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from summarizer import generate_summary
 from pdf_utils import extract_text_from_pdf
 from ocr_utils import extract_text_from_image
-import os
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "https://ai-document-summarizer-khaki.vercel.app/"}})
+
+# Allow only your Vercel domain
+CORS(app,
+     origins=["https://ai-document-summarizer-khaki.vercel.app"],
+     methods=["GET", "POST", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+     supports_credentials=True)
 
 
-
-@app.route("/summarize", methods=["POST"])
+@app.route("/summarize", methods=["POST", "OPTIONS"])
 def summarize_route():
-    try:
-        file = request.files.get("file")
-        length = request.form.get("length", "medium")
 
-        if not file:
-            return jsonify(error="No file uploaded"), 400
+    # Handle browser preflight request
+    if request.method == "OPTIONS":
+        return jsonify({"message": "OK"}), 200
 
-        filename = file.filename.lower()
+    file = request.files.get("file")
+    length = request.form.get("length", "medium")
 
-        # Read file only once
-        file_bytes = file.read()
+    if not file:
+        return jsonify({"error": "No file uploaded"}), 400
 
-        # Extract text
-        if filename.endswith(".pdf"):
-            text = extract_text_from_pdf(file_bytes)
-        else:
-            text = extract_text_from_image(file_bytes)
+    filename = file.filename.lower()
 
-        if not text.strip():
-            return jsonify(error="Could not extract any text from the document"), 400
+    if filename.endswith(".pdf"):
+        text = extract_text_from_pdf(file.stream)
+    else:
+        text = extract_text_from_image(file.stream)
 
-        # Generate summary (Groq)
-        summary = generate_summary(text, length)
+    if not text.strip():
+        return jsonify({"error": "No readable text found"}), 400
 
-        return jsonify(summary=summary)
-
-    except Exception as e:
-        return jsonify(error=f"Server error: {str(e)}"), 500
+    summary = generate_summary(text, length)
+    return jsonify({"summary": summary})
 
 
 @app.route("/", methods=["GET"])
